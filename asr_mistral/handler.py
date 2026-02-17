@@ -137,8 +137,8 @@ class MistralEventHandler(AsyncEventHandler):
             
             await self.audio_queue.put(None)
             
-            # Ждем 200 мс и форсируем отправку
-            await asyncio.sleep(0.2)
+            # wait 100 ms
+            await asyncio.sleep(0.1)
             await self._check_and_send_fast_response()
             return False
 
@@ -181,7 +181,6 @@ class MistralEventHandler(AsyncEventHandler):
                 elif isinstance(event, TranscriptionStreamDone):
                     _LOGGER.debug("Mistral stream signal: Done")
 
-            # Финальная диагностика после полного закрытия стрима сервером
             final_server_text = "".join(self.accumulated_text).strip()
             total_delay = (time.time() - self.stop_received_at) * 1000 if self.stop_received_at else 0
             
@@ -195,11 +194,11 @@ class MistralEventHandler(AsyncEventHandler):
             else:
                 _LOGGER.debug("[DIAGNOSTIC] Perfect match. Fast hack was safe.")
 
-            # Если хак почему-то не сработал (редко), отправляем тут
             if not self.fast_response_sent:
                 await self._check_and_send_fast_response()
 
         except Exception:
             _LOGGER.exception("Error in Mistral stream task")
             if not self.fast_response_sent:
+
                 await self.write_event(TranscriptStop().event())
