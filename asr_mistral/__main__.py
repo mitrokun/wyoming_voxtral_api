@@ -39,12 +39,12 @@ async def main() -> None:
     wyoming_info = Info(
         asr=[
             AsrProgram(
-                name="mistral-realtime",
+                name="voxtral-rt",
                 description="Mistral AI Realtime Transcription",
                 attribution=Attribution(name="Mistral AI", url="https://mistral.ai"),
                 installed=True,
                 supports_transcript_streaming=True,
-                version="1.3.0",
+                version="0.0.1",
                 models=[
                     AsrModel(
                         name=args.model,
@@ -52,7 +52,7 @@ async def main() -> None:
                         attribution=Attribution(name="Mistral AI", url="https://mistral.ai"),
                         installed=True,
                         languages=SUPPORTED_LANGUAGES,
-                        version="1.0",
+                        version="26.02",
                     )
                 ],
             )
@@ -77,4 +77,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+
         pass
