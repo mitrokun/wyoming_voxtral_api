@@ -1,6 +1,6 @@
 # Wyoming gateway for streaming asr [model](https://docs.mistral.ai/models/voxtral-mini-transcribe-realtime-26-02) using Mistral API (paid).
 
-Typical processing time is 0.25s and does not depend on the phrase length.
+Typical processing time is 0.1s and does not depend on the phrase length.
 
 The model automatically determines the language from the available ones:
 
