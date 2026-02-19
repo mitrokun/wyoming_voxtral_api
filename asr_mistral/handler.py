@@ -5,11 +5,11 @@ import time
 from typing import Optional, List
 
 from mistralai import Mistral
-from mistralai.models import AudioFormat, TranscriptionStreamTextDelta, TranscriptionStreamDone, RealtimeTranscriptionError
+from mistralai.models import AudioFormat, TranscriptionStreamTextDelta, TranscriptionStreamDone
 from wyoming.asr import Transcript, TranscriptStart, TranscriptStop, Transcribe
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.event import Event
-from wyoming.info import Describe, Info
+from wyoming.info import Info
 from wyoming.server import AsyncEventHandler
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,6 +66,7 @@ class MistralEventHandler(AsyncEventHandler):
         model: str,
         enable_agc: bool = False,
         chunk_duration_ms: int = 480,
+        fast: bool = False,
         *args, **kwargs,
     ) -> None:
         super().__init__(reader, writer, *args, **kwargs)
@@ -73,6 +74,7 @@ class MistralEventHandler(AsyncEventHandler):
         self.client = client
         self.model = model
         self.enable_agc = enable_agc
+        self.fast = fast
         self.target_buffer_size = chunk_duration_ms * BYTES_PER_MS
         
         self.agc = None
@@ -83,26 +85,16 @@ class MistralEventHandler(AsyncEventHandler):
         self.internal_buffer = bytearray()
         
         self.stop_received_at: float = 0
-        self.fast_response_sent = False
-        self.fast_text = ""
+        self.response_sent = False
 
     async def handle_event(self, event: Event) -> bool:
-        if Describe.is_type(event.type):
-            await self.write_event(self.wyoming_info_event)
-            return True
-
         if Transcribe.is_type(event.type):
-            transcribe = Transcribe.from_event(event)
-            if transcribe.language:
-                self.language = transcribe.language
-                _LOGGER.debug("Language: '%s'", self.language)
             return True
 
         if AudioStart.is_type(event.type):
             self.accumulated_text = []
             self.internal_buffer = bytearray()
-            self.fast_response_sent = False
-            self.fast_text = ""
+            self.response_sent = False
             self.agc = StreamAGC() if self.enable_agc else PassthroughAGC()
 
             while not self.audio_queue.empty():
@@ -129,34 +121,39 @@ class MistralEventHandler(AsyncEventHandler):
 
         if AudioStop.is_type(event.type):
             self.stop_received_at = time.time()
-            _LOGGER.debug("AudioStop received. Starting 200ms timer...")
             
             if self.internal_buffer:
                 await self.audio_queue.put(bytes(self.internal_buffer))
                 self.internal_buffer = bytearray()
             
-            await self.audio_queue.put(None)
+            await self.audio_queue.put(None) # Signal end of stream
             
-            # wait 100 ms
-            await asyncio.sleep(0.1)
-            await self._check_and_send_fast_response()
+            if self.fast:
+                _LOGGER.debug("AudioStop (FAST mode): waiting 150ms for partials...")
+                await asyncio.sleep(0.15)
+                await self._send_final_transcript()
+            else:
+                _LOGGER.debug("AudioStop: waiting for server to close stream...")
+                if self.mistral_task:
+                    await self.mistral_task
+            
             return False
 
         return True
 
-    async def _check_and_send_fast_response(self):
-        """Отправляет текущий накопленный текст, не дожидаясь закрытия сокета."""
-        if self.fast_response_sent:
+    async def _send_final_transcript(self):
+        """Sends the accumulated text."""
+        if self.response_sent:
             return
         
-        self.fast_response_sent = True
-        self.fast_text = "".join(self.accumulated_text).strip()
+        self.response_sent = True
+        final_text = "".join(self.accumulated_text).strip()
         
-        delay = (time.time() - self.stop_received_at) * 1000
-        _LOGGER.info("Fast assembly at %.1f ms: '%s'", delay, self.fast_text)
+        delay = (time.time() - self.stop_received_at) * 1000 if self.stop_received_at else 0
+        _LOGGER.info("Sending result (%s) at %.1f ms: '%s'", "FAST" if self.fast else "FULL", delay, final_text)
         
-        if self.fast_text:
-            await self.write_event(Transcript(text=self.fast_text).event())
+        if final_text:
+            await self.write_event(Transcript(text=final_text).event())
         await self.write_event(TranscriptStop().event())
 
     async def _audio_generator(self):
@@ -167,7 +164,6 @@ class MistralEventHandler(AsyncEventHandler):
             yield chunk
 
     async def _process_mistral_stream(self):
-        start_process = time.time()
         try:
             audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=EXPECTED_SAMPLE_RATE)
             async for event in self.client.audio.realtime.transcribe_stream(
@@ -177,28 +173,13 @@ class MistralEventHandler(AsyncEventHandler):
             ):
                 if isinstance(event, TranscriptionStreamTextDelta):
                     self.accumulated_text.append(event.text)
-                    _LOGGER.debug("Mistral Partial: %s", event.text)
+                    _LOGGER.debug("Δ: %s", event.text)
                 elif isinstance(event, TranscriptionStreamDone):
                     _LOGGER.debug("Mistral stream signal: Done")
 
-            final_server_text = "".join(self.accumulated_text).strip()
-            total_delay = (time.time() - self.stop_received_at) * 1000 if self.stop_received_at else 0
-            
-            _LOGGER.debug("[DIAGNOSTIC] Server closed stream at %.1f ms", total_delay)
-            _LOGGER.debug("[DIAGNOSTIC] Final server assembly: '%s'", final_server_text)
-            
-            if self.fast_text != final_server_text:
-                _LOGGER.warning("[DIAGNOSTIC] TEXT MISMATCH! Fast version missed some tokens.")
-                _LOGGER.warning("   Fast: '%s'", self.fast_text)
-                _LOGGER.warning("   Full: '%s'", final_server_text)
-            else:
-                _LOGGER.debug("[DIAGNOSTIC] Perfect match. Fast hack was safe.")
-
-            if not self.fast_response_sent:
-                await self._check_and_send_fast_response()
+            await self._send_final_transcript()
 
         except Exception:
             _LOGGER.exception("Error in Mistral stream task")
-            if not self.fast_response_sent:
-
+            if not self.response_sent:
                 await self.write_event(TranscriptStop().event())

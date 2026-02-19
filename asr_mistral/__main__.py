@@ -21,6 +21,7 @@ async def main() -> None:
     parser.add_argument("--model", default="voxtral-mini-transcribe-realtime-2602")
     parser.add_argument("--uri", default="tcp://0.0.0.0:10304")
     parser.add_argument("--enable-agc", action="store_true")
+    parser.add_argument("--fast", action="store_true", help="Send result early without waiting for server stream end")
     parser.add_argument("--ms", type=int, default=240, help="Chunk duration in ms (160, 240, 480, 960)")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -30,6 +31,7 @@ async def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     
+    # Потише логи библиотек
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -59,7 +61,7 @@ async def main() -> None:
         ],
     )
 
-    _LOGGER.info("Server starting [Chunk size: %s ms]", args.ms)
+    _LOGGER.info("Server starting [Chunk size: %s ms, Fast mode: %s]", args.ms, args.fast)
 
     handler_factory = partial(
         MistralEventHandler,
@@ -68,6 +70,7 @@ async def main() -> None:
         model=args.model,
         enable_agc=args.enable_agc,
         chunk_duration_ms=args.ms,
+        fast=args.fast,
     )
 
     server = AsyncServer.from_uri(args.uri)
@@ -77,5 +80,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-
         pass
