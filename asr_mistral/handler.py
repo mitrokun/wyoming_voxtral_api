@@ -4,8 +4,8 @@ import time
 from typing import List, Optional
 
 import numpy as np
-from mistralai import Mistral
-from mistralai.models import (
+from mistralai.client import Mistral
+from mistralai.client.models import (
     AudioFormat,
     TranscriptionStreamDone,
     TranscriptionStreamTextDelta,
