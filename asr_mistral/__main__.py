@@ -3,7 +3,7 @@ import asyncio
 import logging
 from functools import partial
 
-from mistralai import Mistral
+from mistralai.client import Mistral
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
 
